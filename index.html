@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coach Kiro Publisher</title>
+<style>
+  :root{--accent:#fe2c55;--ink:#161823;--muted:#6b6e7a;--line:#e3e3e8;--bg:#fafafb}
+  *{box-sizing:border-box}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:var(--bg);color:var(--ink);line-height:1.5}
+  main{max-width:640px;margin:0 auto;padding:32px 20px 64px}
+  h1{font-size:1.7rem;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 24px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px}
+  button,.btn{font:inherit;border:0;border-radius:10px;padding:12px 18px;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line);font-weight:500;padding:8px 12px}
+  label{display:block;font-weight:600;margin:14px 0 6px}
+  input[type=text],textarea,select{width:100%;font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff}
+  textarea{min-height:90px;resize:vertical}
+  .row{display:flex;align-items:center;gap:10px;margin:8px 0;font-weight:400}
+  .row input{width:18px;height:18px}
+  .user{display:flex;align-items:center;gap:12px;justify-content:space-between}
+  .user .who{display:flex;align-items:center;gap:12px}
+  .user img{width:44px;height:44px;border-radius:50%;object-fit:cover;background:var(--line)}
+  .hint{color:var(--muted);font-size:.9rem}
+  .msg{padding:12px 14px;border-radius:10px;margin:12px 0;font-size:.95rem}
+  .err{background:#ffeef1;color:#b00020}
+  .ok{background:#e9f9ef;color:#0b6b2f}
+  .info{background:#f1f2f6}
+  .hidden{display:none}
+  footer{margin-top:32px;font-size:.85rem;color:var(--muted)}
+  footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+  <h1>Coach Kiro Publisher</h1>
+  <p class="sub">Publish your own videos to your own TikTok account.</p>
+
+  <div id="error" class="msg err hidden"></div>
+
+  <section id="loggedOut" class="card hidden">
+    <p>Sign in with TikTok to let this app publish videos on your behalf. The app only accesses your basic profile and posts a video when you confirm it.</p>
+    <a class="btn" href="/auth/login">Login with TikTok</a>
+  </section>
+
+  <section id="loggedIn" class="hidden">
+    <div class="card user">
+      <div class="who">
+        <img id="avatar" alt="">
+        <div>
+          <div><strong id="nick"></strong></div>
+          <div class="hint">Posting to this TikTok account</div>
+        </div>
+      </div>
+      <button class="ghost" id="logout">Log out</button>
+    </div>
+
+    <form id="form" class="card">
+      <label for="video">Video file (MP4, MOV or WebM, 64 MB max)</label>
+      <input id="video" type="file" accept="video/mp4,video/quicktime,video/webm" required>
+      <div class="hint" id="maxDur"></div>
+
+      <label for="title">Caption</label>
+      <textarea id="title" maxlength="2200" placeholder="Write your caption and hashtags..."></textarea>
+
+      <label for="privacy">Who can view this video</label>
+      <select id="privacy" required>
+        <option value="" selected disabled>Select a privacy level…</option>
+      </select>
+
+      <label>Allow users to</label>
+      <div class="row"><input type="checkbox" id="allowComment"><span>Comment</span></div>
+      <div class="row"><input type="checkbox" id="allowDuet"><span>Duet</span></div>
+      <div class="row"><input type="checkbox" id="allowStitch"><span>Stitch</span></div>
+
+      <label>Disclosure</label>
+      <div class="row"><input type="checkbox" id="aigc"><span>This video is AI-generated</span></div>
+      <div class="row"><input type="checkbox" id="commercial"><span>This video promotes a brand, product or service</span></div>
+      <div id="commercialOpts" class="hidden" style="margin-left:28px">
+        <div class="row"><input type="checkbox" id="yourBrand"><span>Your brand (you are promoting yourself or your own business)</span></div>
+        <div class="row"><input type="checkbox" id="brandedContent"><span>Branded content (you are promoting another brand)</span></div>
+        <div class="hint" id="commercialNote"></div>
+      </div>
+
+      <p class="hint" id="declaration">By posting, you agree to TikTok's <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noopener">Music Usage Confirmation</a>.</p>
+
+      <button type="submit" id="submit">Post to TikTok</button>
+    </form>
+
+    <div id="status" class="msg info hidden"></div>
+  </section>
+
+  <footer>
+    <a href="terms.html">Terms of Service</a> &middot; <a href="privacy.html">Privacy Policy</a>
+  </footer>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let creator = null;
+
+function showError(text){ const e=$('error'); e.textContent=text; e.classList.remove('hidden'); }
+function showStatus(text, cls='info'){ const s=$('status'); s.textContent=text; s.className='msg '+cls; }
+
+const PRIVACY_LABELS = {
+  PUBLIC_TO_EVERYONE: 'Everyone',
+  MUTUAL_FOLLOW_FRIENDS: 'Friends',
+  FOLLOWER_OF_CREATOR: 'Followers',
+  SELF_ONLY: 'Only me',
+};
+
+async function init(){
+  const params = new URLSearchParams(location.search);
+  if (params.get('error')) { showError(params.get('error')); history.replaceState({}, '', '/'); }
+
+  const me = await fetch('/api/me');
+  if (me.status === 401) { $('loggedOut').classList.remove('hidden'); return; }
+  const user = await me.json();
+  if (user.error) { showError('Could not load your TikTok profile.'); $('loggedOut').classList.remove('hidden'); return; }
+
+  const ci = await fetch('/api/creator-info');
+  creator = await ci.json();
+  if (creator.error) { showError('TikTok did not return your posting options. Please try again later.'); return; }
+
+  $('avatar').src = user.avatar_url || '';
+  $('nick').textContent = creator.creator_nickname || user.display_name || '';
+  $('loggedIn').classList.remove('hidden');
+
+  const sel = $('privacy');
+  (creator.privacy_level_options || []).forEach((o) => {
+    const opt = document.createElement('option');
+    opt.value = o; opt.textContent = PRIVACY_LABELS[o] || o;
+    sel.appendChild(opt);
+  });
+
+  [['allowComment','comment_disabled'],['allowDuet','duet_disabled'],['allowStitch','stitch_disabled']].forEach(([id,key]) => {
+    if (creator[key]) { $(id).disabled = true; $(id).parentElement.querySelector('span').textContent += ' (disabled in your TikTok settings)'; }
+  });
+
+  if (creator.max_video_post_duration_sec) {
+    $('maxDur').textContent = `Maximum duration for your account: ${Math.round(creator.max_video_post_duration_sec/60)} min.`;
+  }
+}
+
+$('commercial').addEventListener('change', () => {
+  $('commercialOpts').classList.toggle('hidden', !$('commercial').checked);
+  updateCommercial();
+});
+['yourBrand','brandedContent','privacy'].forEach((id) => $(id).addEventListener('change', updateCommercial));
+
+function updateCommercial(){
+  const on = $('commercial').checked;
+  const yb = $('yourBrand').checked, bc = $('brandedContent').checked;
+  const note = $('commercialNote'), decl = $('declaration');
+  const musicLink = '<a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noopener">Music Usage Confirmation</a>';
+  const brandedLink = '<a href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noopener">Branded Content Policy</a>';
+  if (on && bc) {
+    note.textContent = 'Your video will be labeled "Paid partnership". Branded content cannot be set to "Only me".';
+    decl.innerHTML = `By posting, you agree to TikTok's ${brandedLink} and ${musicLink}.`;
+  } else if (on && yb) {
+    note.textContent = 'Your video will be labeled "Promotional content".';
+    decl.innerHTML = `By posting, you agree to TikTok's ${musicLink}.`;
+  } else {
+    note.textContent = on ? 'Select at least one option to continue.' : '';
+    decl.innerHTML = `By posting, you agree to TikTok's ${musicLink}.`;
+  }
+  const selfOnlyOpt = [...$('privacy').options].find((o) => o.value === 'SELF_ONLY');
+  if (selfOnlyOpt) {
+    selfOnlyOpt.disabled = on && bc;
+    if (selfOnlyOpt.disabled && $('privacy').value === 'SELF_ONLY') $('privacy').value = '';
+  }
+  $('submit').disabled = on && !yb && !bc;
+}
+
+$('form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  $('error').classList.add('hidden');
+  const file = $('video').files[0];
+  if (!file) return showError('Please choose a video file.');
+  if (file.size > 64*1024*1024) return showError('Video too large (64 MB maximum).');
+  if (!$('privacy').value) return showError('Please choose who can view this video.');
+
+  const fd = new FormData();
+  fd.append('video', file);
+  fd.append('title', $('title').value);
+  fd.append('privacy_level', $('privacy').value);
+  fd.append('disable_comment', String(!$('allowComment').checked));
+  fd.append('disable_duet', String(!$('allowDuet').checked));
+  fd.append('disable_stitch', String(!$('allowStitch').checked));
+  fd.append('is_aigc', String($('aigc').checked));
+  fd.append('brand_organic_toggle', String($('commercial').checked && $('yourBrand').checked));
+  fd.append('brand_content_toggle', String($('commercial').checked && $('brandedContent').checked));
+  fd.append('consent', 'true');
+
+  $('submit').disabled = true;
+  showStatus('Uploading your video to TikTok…');
+  try {
+    const r = await fetch('/api/publish', { method: 'POST', body: fd });
+    const data = await r.json();
+    if (!r.ok || !data.publish_id) {
+      const msg = data.error && data.error.message ? data.error.message : (typeof data.error === 'string' ? data.error : 'Publishing failed.');
+      showStatus(msg, 'err'); $('submit').disabled = false; return;
+    }
+    pollStatus(data.publish_id);
+  } catch (e) {
+    showStatus('Network error: ' + e.message, 'err'); $('submit').disabled = false;
+  }
+});
+
+async function pollStatus(id, n = 0){
+  const r = await fetch('/api/status/' + id);
+  const j = await r.json();
+  const st = j.data && j.data.status;
+  if (st === 'PUBLISH_COMPLETE') { showStatus('Your video was published on TikTok. It may take a few minutes to appear on your profile.', 'ok'); $('submit').disabled = false; return; }
+  if (st === 'FAILED') { showStatus('TikTok could not publish the video: ' + ((j.data && j.data.fail_reason) || 'unknown reason'), 'err'); $('submit').disabled = false; return; }
+  if (n > 40) { showStatus('TikTok is still processing your video. Check your TikTok app in a few minutes.', 'info'); $('submit').disabled = false; return; }
+  showStatus('TikTok is processing your video… (' + (st || 'PROCESSING') + ')');
+  setTimeout(() => pollStatus(id, n + 1), 3000);
+}
+
+$('logout').addEventListener('click', async () => {
+  await fetch('/auth/logout', { method: 'POST' });
+  location.reload();
+});
+
+init().catch((e) => showError('Unexpected error: ' + e.message));
+</script>
+</body>
+</html>
